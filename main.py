@@ -5,24 +5,23 @@ app = Flask(__name__)
 CORS(app)
 
 import fitz  # PyMuPDF
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 import pytesseract
 import tempfile
 import os
 import re
 from pdf2image import convert_from_path
 
-# Regex: busca entre Ref: y /, o M:xxxx, o 4+ cifras/letras (muy flexible)
-REGEX_DEFAULT = r"Ref:\s*([A-Za-z0-9:\.\- ]+?)(?:/|//)|\bM:\d+[A-Z]?\b|\b\d{4,}[A-Z]?\b"
+# Regex mejorado, soporta punto, espacio, dos puntos, guion, salto de línea (multilínea)
+REGEX_DEFAULT = r"Ref:\s*([\w\s.\-:]+?)(?=\/|//|$)|\bM:\d+[A-Z]?\b|\b\d{4,}[A-Z]?\b"
 
 def find_codes(text, regex_pattern):
-    # Encuentra TODOS los códigos que matchean el patrón
+    # Utiliza flags para multiline y dotall
     codes = []
-    for m in re.finditer(regex_pattern, text):
-        # Toma el grupo no vacío (por los OR del regex)
+    for m in re.finditer(regex_pattern, text, flags=re.MULTILINE | re.DOTALL):
         for g in m.groups():
             if g:
-                codes.append(g.strip())
+                codes.append(g.strip().replace('\n',' '))
     return codes
 
 def highlight_pdf_text(pdf_path, regex_pattern):
@@ -30,10 +29,10 @@ def highlight_pdf_text(pdf_path, regex_pattern):
     found = False
     for page in doc:
         text = page.get_text()
-        for match in re.finditer(regex_pattern, text):
+        for match in re.finditer(regex_pattern, text, flags=re.MULTILINE | re.DOTALL):
             for group in match.groups():
                 if group:
-                    code = group.strip()
+                    code = group.strip().replace('\n',' ')
                     areas = page.search_for(code)
                     for area in areas:
                         page.add_highlight_annot(area)
@@ -44,7 +43,6 @@ def highlight_pdf_text(pdf_path, regex_pattern):
     return out_file.name if found else None
 
 def highlight_image(img, regex_pattern):
-    # Usa RGBA para overlay transparente
     img = img.convert("RGBA")
     text = pytesseract.image_to_string(img)
     codes = find_codes(text, regex_pattern)
@@ -55,25 +53,17 @@ def highlight_image(img, regex_pattern):
     draw = ImageDraw.Draw(overlay)
     for i, t in enumerate(data['text']):
         for code in codes:
-            if t.strip() and code in t:
+            # Busca si el texto actual coincide con algún código (ignorando espacios y saltos)
+            if t.strip() and t.replace('\n',' ').replace(' ','') in code.replace(' ','').replace('\n',''):
                 (x, y, w, h) = (data['left'][i], data['top'][i], data['width'][i], data['height'][i])
-                # Amarillo transparente, borde rojo
                 draw.rectangle([(x, y), (x + w, y + h)], fill=(255,255,0,120), outline="red", width=2)
-    # Mezcla overlay con original
     img = Image.alpha_composite(img, overlay)
-    # Opcional: dibuja lista de códigos al pie
-    font = ImageFont.load_default()
-    y_text = img.height - 15 * len(codes) - 10
-    draw_img = ImageDraw.Draw(img)
-    for code in codes:
-        draw_img.rectangle([(10, y_text), (img.width - 10, y_text + 15)], fill=(255,255,0,180))
-        draw_img.text((15, y_text), code, fill="red", font=font)
-        y_text += 15
     tmp_img = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
     img.convert("RGB").save(tmp_img.name)
     return tmp_img.name, codes
 
 def convert_images_to_pdf(img_paths):
+    from PIL import Image
     images = [Image.open(p).convert("RGB") for p in img_paths]
     tmp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     images[0].save(tmp_pdf.name, save_all=True, append_images=images[1:])
@@ -89,7 +79,6 @@ def resaltar_pdf():
     file = request.files['file']
     regex_pattern = request.form.get('regex') or REGEX_DEFAULT
 
-    # Guarda temporalmente
     tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[-1])
     file.save(tmp_file.name)
 
@@ -97,14 +86,11 @@ def resaltar_pdf():
     try:
         if ext == "pdf":
             try:
-                # PDF de texto
                 highlighted_pdf = highlight_pdf_text(tmp_file.name, regex_pattern)
                 if highlighted_pdf:
                     return send_file(highlighted_pdf, as_attachment=True, download_name="pdf_resaltado.pdf")
             except Exception as e:
-                pass  # Si PyMuPDF falla, intentamos imágenes abajo
-
-            # PDF escaneado (como imágenes, OCR)
+                pass
             images = convert_from_path(tmp_file.name)
             img_paths = []
             found_any = False
@@ -126,7 +112,7 @@ def resaltar_pdf():
         elif ext in ["jpg", "jpeg", "png"]:
             out_img, codes = highlight_image(Image.open(tmp_file.name), regex_pattern)
             if out_img:
-                # Convierte a PDF antes de devolver
+                from PIL import Image
                 img = Image.open(out_img)
                 tmp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
                 img.convert("RGB").save(tmp_pdf.name)
