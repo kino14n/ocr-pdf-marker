@@ -1,29 +1,38 @@
 # ocr-pdf-marker
 
-Microservicio en Python/Flask que recibe un PDF, extrae texto y resalta los códigos encontrados usando PyMuPDF.  
-Ideal para integración con apps web o backend PHP (como InfinityFree).
+Microservicio universal para resaltar códigos en PDFs y en imágenes usando OCR.
 
-## Uso
-
-`POST /resaltar_pdf`  
-- Form-data:
-  - `file`: archivo PDF (obligatorio)
-  - `regex`: (opcional) patrón para buscar códigos (por defecto: `Ref:\s*([A-Za-z0-9 .\-]+)[\/]{1,2}`)
-
-## Respuesta
-
-- Descarga directa del PDF resaltado, listo para mostrar o descargar.
-
-## Requisitos
-
-- Python 3.9+
-- Flask
-- PyMuPDF
-
-## Despliegue recomendado
-
-- [Render.com](https://render.com/)
-- Railway
-- Google Cloud Run
+- **Resalta códigos automáticamente en archivos PDF (texto o escaneados) y en imágenes (JPG/PNG)**
+- Devuelve un archivo PDF resaltado listo para descargar o mostrar
+- Soporta PDFs de solo texto, PDFs escaneados (por OCR) y archivos de imagen
+- Ideal para integración con apps web o backend PHP (InfinityFree, etc.)
 
 ---
+
+## **¿Cómo funciona?**
+
+1. Envía un archivo (PDF/JPG/PNG) al endpoint `/resaltar_pdf`.
+2. El microservicio detecta si es PDF de texto o imagen:
+   - **PDF con texto:** busca y resalta códigos directamente.
+   - **PDF solo imagen:** extrae cada página como imagen, hace OCR, busca y resalta los códigos.
+   - **Imagen (JPG/PNG):** hace OCR, busca y resalta los códigos.
+3. Devuelve el PDF resaltado para descarga.
+
+---
+
+## **Uso**
+
+### **POST /resaltar_pdf**
+
+- **Form-data:**
+  - `file`: archivo PDF/JPG/PNG (obligatorio)
+  - `regex`: patrón opcional para buscar códigos (por defecto: `Ref:\s*M?:?\s?([A-Z0-9:\-]+)`)
+
+#### **Respuesta:**
+- Si encuentra códigos:  
+  Devuelve el archivo PDF resaltado como descarga.
+- Si NO encuentra códigos:  
+  Devuelve JSON de error.  
+  Ejemplo:  
+  ```json
+  {"status":"error", "error":"No se encontraron códigos para resaltar"}
