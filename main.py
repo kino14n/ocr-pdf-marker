@@ -63,7 +63,7 @@ def highlight_image(img, regex_pattern):
     return tmp_img.name, codes
 
 def convert_images_to_pdf(img_paths):
-    from PIL import Image
+    
     images = [Image.open(p).convert("RGB") for p in img_paths]
     tmp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     images[0].save(tmp_pdf.name, save_all=True, append_images=images[1:])
