@@ -16,7 +16,6 @@ from pdf2image import convert_from_path
 REGEX_DEFAULT = r"Ref:\s*([\w\s.\-:]+?)(?=\/|//|$)|\bM:\d+[A-Z]?\b|\b\d{4,}[A-Z]?\b"
 
 def find_codes(text, regex_pattern):
-    # Utiliza flags para multiline y dotall
     codes = []
     for m in re.finditer(regex_pattern, text, flags=re.MULTILINE | re.DOTALL):
         for g in m.groups():
@@ -63,7 +62,6 @@ def highlight_image(img, regex_pattern):
     return tmp_img.name, codes
 
 def convert_images_to_pdf(img_paths):
-    
     images = [Image.open(p).convert("RGB") for p in img_paths]
     tmp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     images[0].save(tmp_pdf.name, save_all=True, append_images=images[1:])
@@ -112,7 +110,6 @@ def resaltar_pdf():
         elif ext in ["jpg", "jpeg", "png"]:
             out_img, codes = highlight_image(Image.open(tmp_file.name), regex_pattern)
             if out_img:
-                from PIL import Image
                 img = Image.open(out_img)
                 tmp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
                 img.convert("RGB").save(tmp_pdf.name)
