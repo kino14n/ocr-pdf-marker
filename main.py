@@ -1,5 +1,10 @@
 from flask import Flask, request, send_file, jsonify
-from flask_cors import CORS 
+from flask_cors import CORS
+
+app = Flask(__name__)
+CORS(app)  # <-- ¡Debajo de la ÚNICA creación de la app!
+
+
 import fitz  # PyMuPDF
 from PIL import Image, ImageDraw, ImageFont
 import pytesseract
@@ -8,7 +13,6 @@ import os
 import re
 from pdf2image import convert_from_path
 
-app = Flask(__name__)
 
 REGEX_DEFAULT = r"Ref:\s*M?:?\s?([A-Z0-9:\-]+)"
 
