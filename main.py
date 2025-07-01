@@ -12,19 +12,16 @@ import os
 import re
 from pdf2image import convert_from_path
 
-# Regex ULTRA ESTRICTA: Solo entre Ref: y el primer slash /
-REGEX_DEFAULT = r"Ref:\s*((?:.|\n)*?)(?=\/)"
+REGEX_REF = r"Ref:\s*([A-Za-z0-9:\.\- ]+?)(?=\/)"
 
-def find_codes(text, regex_pattern):
+def find_codes(text, regex_pattern=REGEX_REF):
     codes = []
     for m in re.finditer(regex_pattern, text, flags=re.MULTILINE):
-        for g in m.groups():
-            if g:
-                code = g.replace('\n', ' ').strip()
-                # Limpia puntos/dos puntos/espacios extremos (si quieres)
-                code = re.sub(r'^[\s.:,-]+|[\s.:,-]+$', '', code)
-                codes.append(code)
+        code = m.group(1).strip().replace('\n', '').replace('\r', '')
+        if code:
+            codes.append(code)
     return codes
+
 
 def highlight_pdf_text(pdf_path, regex_pattern):
     doc = fitz.open(pdf_path)
