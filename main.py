@@ -12,8 +12,8 @@ import os
 import re
 from pdf2image import convert_from_path
 
-# Regex mejorado, soporta punto, espacio, dos puntos, guion, salto de línea (multilínea)
-REGEX_DEFAULT = r"Ref:\s*([\w\s.\-:]+?)(?=\/|//|$)|\bM:\d+[A-Z]?\b|\b\d{4,}[A-Z]?\b"
+# Regex mejorada SOLO lo que está entre Ref: y el primer /
+REGEX_DEFAULT = r"Ref:\s*([A-Za-z0-9 .:,\-]+?)\s*(?=/)"
 
 def find_codes(text, regex_pattern):
     codes = []
