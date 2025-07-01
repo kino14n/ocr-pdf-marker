@@ -12,29 +12,32 @@ import os
 import re
 from pdf2image import convert_from_path
 
-REGEX_REF = r"Ref:\s*((?:.|\n)*?)(?=/)"  # Acepta saltos de línea
+# --- Regex robusto: desde Ref: hasta el primer slash (/) ---
+REGEX_REF = r"Ref:\s*([A-Za-z0-9:\.\-\s]+?)(?=\/)"
 
-def find_codes(text, regex_pattern=REGEX_REF):
-    codes = []
-    for m in re.finditer(regex_pattern, text, flags=re.MULTILINE):
-        code = m.group(1)
-        # Unir fragmentos: quitar saltos de línea y espacios extra
-        code = code.replace('\n', '').replace('\r', '').replace(' ', '')
-        code = code.strip()
-        # Solo códigos razonables
-        if code and len(code) >= 3:
-            codes.append(code)
-    return codes
+def extract_codes(text):
+    # Une los saltos de línea y espacios duplicados
+    cleaned = re.sub(r'\s+', ' ', text)
+    # Encuentra todos los códigos
+    matches = re.findall(REGEX_REF, cleaned)
+    results = []
+    for m in matches:
+        code = m.strip().replace(' ', '').replace('\n', '').replace('\r', '')
+        # Opcional: filtra longitud válida y que tenga al menos un número
+        if 3 < len(code) < 20 and re.search(r'\d', code):
+            results.append(code)
+    # Elimina duplicados
+    return list(dict.fromkeys(results))
 
 def highlight_pdf_text(pdf_path, regex_pattern):
     doc = fitz.open(pdf_path)
     found = False
     for page in doc:
-        text = page.get_text()
-        codes = find_codes(text, regex_pattern)
+        # Extrae texto completo y une saltos de línea
+        text = page.get_text().replace('\n', ' ')
+        codes = extract_codes(text)
         for code in codes:
-            if not code:
-                continue
+            # Busca y resalta el código en la página
             areas = page.search_for(code)
             for area in areas:
                 page.add_highlight_annot(area)
@@ -44,10 +47,10 @@ def highlight_pdf_text(pdf_path, regex_pattern):
     doc.close()
     return out_file.name if found else None
 
-def highlight_image(img, regex_pattern):
+def highlight_image(img, regex_pattern=REGEX_REF):
     img = img.convert("RGBA")
     text = pytesseract.image_to_string(img)
-    codes = find_codes(text, regex_pattern)
+    codes = extract_codes(text)
     if not codes:
         return None, []
     data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
@@ -55,8 +58,8 @@ def highlight_image(img, regex_pattern):
     draw = ImageDraw.Draw(overlay)
     for i, t in enumerate(data['text']):
         for code in codes:
-            # Busca coincidencia parcial sin espacios ni saltos
-            if t.strip() and t.replace('\n','').replace(' ','') in code.replace(' ',''):
+            # Si el token del OCR es igual a un código extraído (ignorando espacios)
+            if t.strip() and t.replace(' ','') in code.replace(' ',''):
                 (x, y, w, h) = (data['left'][i], data['top'][i], data['width'][i], data['height'][i])
                 draw.rectangle([(x, y), (x + w, y + h)], fill=(255,255,0,120), outline="red", width=2)
     img = Image.alpha_composite(img, overlay)
@@ -78,7 +81,6 @@ def resaltar_pdf():
         return jsonify({"error": "Archivo no enviado", "status": "error"}), 400
 
     file = request.files['file']
-    regex_pattern = REGEX_REF
 
     tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[-1])
     file.save(tmp_file.name)
@@ -87,7 +89,7 @@ def resaltar_pdf():
     try:
         if ext == "pdf":
             try:
-                highlighted_pdf = highlight_pdf_text(tmp_file.name, regex_pattern)
+                highlighted_pdf = highlight_pdf_text(tmp_file.name, REGEX_REF)
                 if highlighted_pdf:
                     return send_file(highlighted_pdf, as_attachment=True, download_name="pdf_resaltado.pdf")
             except Exception as e:
@@ -98,7 +100,7 @@ def resaltar_pdf():
             for img in images:
                 img_path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
                 img.save(img_path)
-                out_img, codes = highlight_image(Image.open(img_path), regex_pattern)
+                out_img, codes = highlight_image(Image.open(img_path))
                 if out_img:
                     img_paths.append(out_img)
                     found_any = True
@@ -111,7 +113,7 @@ def resaltar_pdf():
                 return jsonify({"error": "No se encontraron códigos para resaltar", "status": "error"}), 404
 
         elif ext in ["jpg", "jpeg", "png"]:
-            out_img, codes = highlight_image(Image.open(tmp_file.name), regex_pattern)
+            out_img, codes = highlight_image(Image.open(tmp_file.name))
             if out_img:
                 img = Image.open(out_img)
                 tmp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
