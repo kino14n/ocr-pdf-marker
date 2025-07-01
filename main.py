@@ -12,6 +12,7 @@ import os
 import re
 from pdf2image import convert_from_path
 
+# Solo entre Ref: y el primer /
 REGEX_REF = r"Ref:\s*([A-Za-z0-9:\.\- ]+?)(?=\/)"
 
 def find_codes(text, regex_pattern=REGEX_REF):
@@ -22,20 +23,19 @@ def find_codes(text, regex_pattern=REGEX_REF):
             codes.append(code)
     return codes
 
-
 def highlight_pdf_text(pdf_path, regex_pattern):
     doc = fitz.open(pdf_path)
     found = False
     for page in doc:
         text = page.get_text()
-        for match in re.finditer(regex_pattern, text, flags=re.MULTILINE | re.DOTALL):
-            for group in match.groups():
-                if group:
-                    code = group.strip().replace('\n',' ')
-                    areas = page.search_for(code)
-                    for area in areas:
-                        page.add_highlight_annot(area)
-                        found = True
+        for m in re.finditer(regex_pattern, text, flags=re.MULTILINE):
+            code = m.group(1).strip().replace('\n', '').replace('\r', '')
+            if code:
+                # Busca la referencia exacta en la página
+                areas = page.search_for(code)
+                for area in areas:
+                    page.add_highlight_annot(area)
+                    found = True
     out_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     doc.save(out_file.name)
     doc.close()
@@ -53,7 +53,7 @@ def highlight_image(img, regex_pattern):
     for i, t in enumerate(data['text']):
         for code in codes:
             # Busca si el texto actual coincide con algún código (ignorando espacios y saltos)
-            if t.strip() and t.replace('\n',' ').replace(' ','') in code.replace(' ','').replace('\n',''):
+            if t.strip() and t.replace('\n','').replace(' ','') in code.replace(' ','').replace('\n',''):
                 (x, y, w, h) = (data['left'][i], data['top'][i], data['width'][i], data['height'][i])
                 draw.rectangle([(x, y), (x + w, y + h)], fill=(255,255,0,120), outline="red", width=2)
     img = Image.alpha_composite(img, overlay)
@@ -75,7 +75,7 @@ def resaltar_pdf():
         return jsonify({"error": "Archivo no enviado", "status": "error"}), 400
 
     file = request.files['file']
-    regex_pattern = request.form.get('regex') or REGEX_DEFAULT
+    regex_pattern = request.form.get('regex') or REGEX_REF
 
     tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[-1])
     file.save(tmp_file.name)
