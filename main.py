@@ -2,8 +2,7 @@ from flask import Flask, request, send_file, jsonify
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)  # <-- ¡Debajo de la ÚNICA creación de la app!
-
+CORS(app)
 
 import fitz  # PyMuPDF
 from PIL import Image, ImageDraw, ImageFont
@@ -13,116 +12,130 @@ import os
 import re
 from pdf2image import convert_from_path
 
+# Regex: busca lo que esté entre "Ref:" y la primera / o //
+REGEX_DEFAULT = r"Ref:\s*([A-Za-z0-9.\- ]+?)(?:/|//)"
 
-REGEX_DEFAULT = r"Ref:\s*M?:?\s?([A-Z0-9:\-]+)"
+def find_codes(text, regex_pattern):
+    # Encuentra TODOS los códigos que matchean el patrón (mayus, minus, puntos, guiones, espacios)
+    return [m.group(1).strip() for m in re.finditer(regex_pattern, text)]
 
 def highlight_pdf_text(pdf_path, regex_pattern):
     doc = fitz.open(pdf_path)
-    count = 0
+    found = False
     for page in doc:
-        text = page.get_text("text")
+        text = page.get_text()
         for match in re.finditer(regex_pattern, text):
-            codigo = match.group(0)
-            # Busca la posición exacta del código en la página
-            for inst in page.search_for(codigo):
-                page.add_highlight_annot(inst)
-                count += 1
-    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-    doc.save(tmp.name)
+            code = match.group(1)
+            areas = page.search_for(code)
+            for area in areas:
+                page.add_highlight_annot(area)
+                found = True
+    out_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    doc.save(out_file.name)
     doc.close()
-    return tmp.name, count
+    return out_file.name if found else None
 
-def pdf_has_text(pdf_path):
-    try:
-        doc = fitz.open(pdf_path)
-        for page in doc:
-            if page.get_text("text").strip():
-                return True
-        doc.close()
-    except Exception:
-        pass
-    return False
-
-def highlight_image(img, codes, regex_pattern):
+def highlight_image(img, regex_pattern):
+    # Realiza OCR a la imagen
     text = pytesseract.image_to_string(img)
-    found_codes = []
-    for match in re.finditer(regex_pattern, text):
-        code = match.group(0)
-        found_codes.append(code)
-    # Simplemente marca los códigos al pie de la imagen (no sobre el texto original, pues OCR no da coordenadas)
+    codes = find_codes(text, regex_pattern)
+    if not codes:
+        return None, []
+    # Busca la posición de los códigos y los resalta
+    data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
     draw = ImageDraw.Draw(img)
+    for i, t in enumerate(data['text']):
+        for code in codes:
+            if t.strip() and code in t:
+                (x, y, w, h) = (data['left'][i], data['top'][i], data['width'][i], data['height'][i])
+                draw.rectangle([(x, y), (x + w, y + h)], outline="red", width=2)
+                draw.rectangle([(x, y), (x + w, y + h)], fill=(255, 255, 0, 100))  # Amarillo semitransparente
+    # Marca los códigos encontrados abajo también (opcional)
     font = ImageFont.load_default()
-    y = img.height - (15 * len(found_codes)) - 10
-    for code in found_codes:
-        draw.rectangle([(10, y), (img.width - 10, y + 15)], fill="yellow")
-        draw.text((15, y), code, fill="red", font=font)
-        y += 15
-    return img, found_codes
+    y_text = img.height - 15 * len(codes) - 10
+    for code in codes:
+        draw.rectangle([(10, y_text), (img.width - 10, y_text + 15)], fill="yellow")
+        draw.text((15, y_text), code, fill="red", font=font)
+        y_text += 15
+    tmp_img = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+    img.save(tmp_img.name)
+    return tmp_img.name, codes
 
-def highlight_pdf_images(pdf_path, regex_pattern):
-    images = convert_from_path(pdf_path)
-    found_any = []
-    temp_images = []
-    for img in images:
-        img, codes = highlight_image(img, [], regex_pattern)
-        found_any.extend(codes)
-        temp_img = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-        img.save(temp_img.name)
-        temp_images.append(temp_img.name)
-    # Junta todas las imágenes a un solo PDF
-    images = [Image.open(f) for f in temp_images]
-    pdf_file = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-    images[0].save(pdf_file.name, save_all=True, append_images=images[1:])
-    # Limpieza
-    for f in temp_images:
-        os.remove(f)
-    return pdf_file.name, len(found_any)
+def convert_images_to_pdf(img_paths):
+    images = [Image.open(p).convert("RGB") for p in img_paths]
+    tmp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    images[0].save(tmp_pdf.name, save_all=True, append_images=images[1:])
+    for p in img_paths:
+        os.remove(p)
+    return tmp_pdf.name
 
 @app.route('/resaltar_pdf', methods=['POST'])
 def resaltar_pdf():
     if 'file' not in request.files:
-        return jsonify({'status': 'error', 'error': 'No se recibió archivo'}), 400
+        return jsonify({"error": "Archivo no enviado", "status": "error"}), 400
+
     file = request.files['file']
-    filename = file.filename.lower()
-    regex = request.form.get('regex', REGEX_DEFAULT)
+    regex_pattern = request.form.get('regex') or REGEX_DEFAULT
 
-    # Procesar PDF
-    if filename.endswith('.pdf'):
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as temp:
-            file.save(temp.name)
-            # ¿El PDF tiene texto?
-            if pdf_has_text(temp.name):
-                out_file, count = highlight_pdf_text(temp.name, regex)
-                if count == 0:
-                    os.remove(out_file)
-                    return jsonify({'status': 'error', 'error': 'No se encontraron códigos para resaltar (PDF con texto)'}), 200
-                return send_file(out_file, as_attachment=True, download_name="pdf_resaltado.pdf")
+    # Guarda temporalmente
+    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[-1])
+    file.save(tmp_file.name)
+
+    ext = file.filename.lower().split('.')[-1]
+    try:
+        if ext == "pdf":
+            try:
+                # ¿PDF de texto?
+                highlighted_pdf = highlight_pdf_text(tmp_file.name, regex_pattern)
+                if highlighted_pdf:
+                    return send_file(highlighted_pdf, as_attachment=True, download_name="pdf_resaltado.pdf")
+            except Exception as e:
+                pass  # Si PyMuPDF falla, intentamos como imágenes abajo
+
+            # Si no es texto, convierte páginas a imagen y procesa por OCR
+            images = convert_from_path(tmp_file.name)
+            img_paths = []
+            found_any = False
+            for img in images:
+                img_path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+                img.save(img_path)
+                out_img, codes = highlight_image(Image.open(img_path), regex_pattern)
+                if out_img:
+                    img_paths.append(out_img)
+                    found_any = True
+                else:
+                    img_paths.append(img_path)  # Si no hay códigos, igual mete la página original
+            if found_any:
+                pdf_result = convert_images_to_pdf(img_paths)
+                return send_file(pdf_result, as_attachment=True, download_name="pdf_resaltado.pdf")
             else:
-                # PDF solo imagen: usa OCR
-                out_file, count = highlight_pdf_images(temp.name, regex)
-                if count == 0:
-                    os.remove(out_file)
-                    return jsonify({'status': 'error', 'error': 'No se encontraron códigos para resaltar (PDF de imagen)'}), 200
-                return send_file(out_file, as_attachment=True, download_name="pdf_resaltado.pdf")
+                return jsonify({"error": "No se encontraron códigos para resaltar", "status": "error"}), 404
 
-    # Procesar imagen directa (JPG/PNG)
-    elif filename.endswith('.jpg') or filename.endswith('.jpeg') or filename.endswith('.png'):
-        with tempfile.NamedTemporaryFile(suffix=filename[-4:], delete=False) as temp:
-            file.save(temp.name)
-            img = Image.open(temp.name)
-            img, found_codes = highlight_image(img, [], regex)
-            if not found_codes:
-                return jsonify({'status': 'error', 'error': 'No se encontraron códigos en la imagen'}), 200
-            # Guarda como PDF para entrega uniforme
-            pdf_file = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-            img.save(pdf_file.name, "PDF", resolution=100.0)
-            return send_file(pdf_file.name, as_attachment=True, download_name="pdf_resaltado.pdf")
-    else:
-        return jsonify({'status': 'error', 'error': 'Formato no soportado. Sube un PDF o imagen JPG/PNG'}), 400
+        elif ext in ["jpg", "jpeg", "png"]:
+            out_img, codes = highlight_image(Image.open(tmp_file.name), regex_pattern)
+            if out_img:
+                # Convierte a PDF antes de devolver
+                img = Image.open(out_img)
+                tmp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+                img.convert("RGB").save(tmp_pdf.name)
+                return send_file(tmp_pdf.name, as_attachment=True, download_name="pdf_resaltado.pdf")
+            else:
+                return jsonify({"error": "No se encontraron códigos para resaltar", "status": "error"}), 404
 
-@app.route('/')
-def home():
-    return "Servicio OCR/Resaltado PDF e imagen operativo."
+        else:
+            return jsonify({"error": "Formato no soportado", "status": "error"}), 400
 
-if __name__ == '__main__':
+    except Exception as e:
+        return jsonify({"error": f"Error procesando archivo: {str(e)}", "status": "error"}), 500
+    finally:
+        try:
+            os.remove(tmp_file.name)
+        except Exception:
+            pass
+
+@app.route('/', methods=['GET'])
+def health():
+    return "OCR PDF Marker running!", 200
+
+if __name__ == "__main__":
     app.run(host='0.0.0.0', port=10000)
