@@ -12,15 +12,18 @@ import os
 import re
 from pdf2image import convert_from_path
 
-# Regex mejorada SOLO lo que está entre Ref: y el primer /
-REGEX_DEFAULT = r"Ref:\s*([A-Za-z0-9 .:,\-]+?)\s*(?=/)"
+# Regex ULTRA ESTRICTA: Solo entre Ref: y el primer slash /
+REGEX_DEFAULT = r"Ref:\s*((?:.|\n)*?)(?=\/)"
 
 def find_codes(text, regex_pattern):
     codes = []
-    for m in re.finditer(regex_pattern, text, flags=re.MULTILINE | re.DOTALL):
+    for m in re.finditer(regex_pattern, text, flags=re.MULTILINE):
         for g in m.groups():
             if g:
-                codes.append(g.strip().replace('\n',' '))
+                code = g.replace('\n', ' ').strip()
+                # Limpia puntos/dos puntos/espacios extremos (si quieres)
+                code = re.sub(r'^[\s.:,-]+|[\s.:,-]+$', '', code)
+                codes.append(code)
     return codes
 
 def highlight_pdf_text(pdf_path, regex_pattern):
