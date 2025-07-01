@@ -12,12 +12,18 @@ import os
 import re
 from pdf2image import convert_from_path
 
-# Regex: busca lo que esté entre "Ref:" y la primera / o //
-REGEX_DEFAULT = r"Ref:\s*([A-Za-z0-9.\- ]+?)(?:/|//)"
+# Regex: busca entre Ref: y /, o M:xxxx, o 4+ cifras/letras (muy flexible)
+REGEX_DEFAULT = r"Ref:\s*([A-Za-z0-9:\.\- ]+?)(?:/|//)|\bM:\d+[A-Z]?\b|\b\d{4,}[A-Z]?\b"
 
 def find_codes(text, regex_pattern):
-    # Encuentra TODOS los códigos que matchean el patrón (mayus, minus, puntos, guiones, espacios)
-    return [m.group(1).strip() for m in re.finditer(regex_pattern, text)]
+    # Encuentra TODOS los códigos que matchean el patrón
+    codes = []
+    for m in re.finditer(regex_pattern, text):
+        # Toma el grupo no vacío (por los OR del regex)
+        for g in m.groups():
+            if g:
+                codes.append(g.strip())
+    return codes
 
 def highlight_pdf_text(pdf_path, regex_pattern):
     doc = fitz.open(pdf_path)
@@ -25,40 +31,46 @@ def highlight_pdf_text(pdf_path, regex_pattern):
     for page in doc:
         text = page.get_text()
         for match in re.finditer(regex_pattern, text):
-            code = match.group(1)
-            areas = page.search_for(code)
-            for area in areas:
-                page.add_highlight_annot(area)
-                found = True
+            for group in match.groups():
+                if group:
+                    code = group.strip()
+                    areas = page.search_for(code)
+                    for area in areas:
+                        page.add_highlight_annot(area)
+                        found = True
     out_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     doc.save(out_file.name)
     doc.close()
     return out_file.name if found else None
 
 def highlight_image(img, regex_pattern):
-    # Realiza OCR a la imagen
+    # Usa RGBA para overlay transparente
+    img = img.convert("RGBA")
     text = pytesseract.image_to_string(img)
     codes = find_codes(text, regex_pattern)
     if not codes:
         return None, []
-    # Busca la posición de los códigos y los resalta
     data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
-    draw = ImageDraw.Draw(img)
+    overlay = Image.new("RGBA", img.size, (255,255,255,0))
+    draw = ImageDraw.Draw(overlay)
     for i, t in enumerate(data['text']):
         for code in codes:
             if t.strip() and code in t:
                 (x, y, w, h) = (data['left'][i], data['top'][i], data['width'][i], data['height'][i])
-                draw.rectangle([(x, y), (x + w, y + h)], outline="red", width=2)
-                draw.rectangle([(x, y), (x + w, y + h)], fill=(255, 255, 0, 100))  # Amarillo semitransparente
-    # Marca los códigos encontrados abajo también (opcional)
+                # Amarillo transparente, borde rojo
+                draw.rectangle([(x, y), (x + w, y + h)], fill=(255,255,0,120), outline="red", width=2)
+    # Mezcla overlay con original
+    img = Image.alpha_composite(img, overlay)
+    # Opcional: dibuja lista de códigos al pie
     font = ImageFont.load_default()
     y_text = img.height - 15 * len(codes) - 10
+    draw_img = ImageDraw.Draw(img)
     for code in codes:
-        draw.rectangle([(10, y_text), (img.width - 10, y_text + 15)], fill="yellow")
-        draw.text((15, y_text), code, fill="red", font=font)
+        draw_img.rectangle([(10, y_text), (img.width - 10, y_text + 15)], fill=(255,255,0,180))
+        draw_img.text((15, y_text), code, fill="red", font=font)
         y_text += 15
     tmp_img = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-    img.save(tmp_img.name)
+    img.convert("RGB").save(tmp_img.name)
     return tmp_img.name, codes
 
 def convert_images_to_pdf(img_paths):
@@ -85,14 +97,14 @@ def resaltar_pdf():
     try:
         if ext == "pdf":
             try:
-                # ¿PDF de texto?
+                # PDF de texto
                 highlighted_pdf = highlight_pdf_text(tmp_file.name, regex_pattern)
                 if highlighted_pdf:
                     return send_file(highlighted_pdf, as_attachment=True, download_name="pdf_resaltado.pdf")
             except Exception as e:
-                pass  # Si PyMuPDF falla, intentamos como imágenes abajo
+                pass  # Si PyMuPDF falla, intentamos imágenes abajo
 
-            # Si no es texto, convierte páginas a imagen y procesa por OCR
+            # PDF escaneado (como imágenes, OCR)
             images = convert_from_path(tmp_file.name)
             img_paths = []
             found_any = False
@@ -104,7 +116,7 @@ def resaltar_pdf():
                     img_paths.append(out_img)
                     found_any = True
                 else:
-                    img_paths.append(img_path)  # Si no hay códigos, igual mete la página original
+                    img_paths.append(img_path)
             if found_any:
                 pdf_result = convert_images_to_pdf(img_paths)
                 return send_file(pdf_result, as_attachment=True, download_name="pdf_resaltado.pdf")
